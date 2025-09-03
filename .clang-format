@@ -1,6 +1,6 @@
 #### modified LLVM dump
 ---
-Language:        Cpp
+Language:        C
 AccessModifierOffset: -2
 AlignAfterOpenBracket: Align
 AlignArrayOfStructures: None
