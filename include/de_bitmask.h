@@ -30,7 +30,6 @@
 /* ---- Constants ---- */
 typedef u64 mblk_t;
 #define DE_MSK_MBLK_BITS 64
-#define DE_MSK_SMALL_CAPACITY_BITS 64
 
 // clang-format off
 
@@ -289,19 +288,29 @@ de_msk_count(
 );
 
 /*
-prints the bits to the screen (inefficiently)
+prints all bits to the screen. idx 0 is bottom left
 */
 DE_CONTAINER_BITMASK_API u0
-de_msk_print(
-  const de_msk* const _msk
+de_msk_prints(
+  const de_msk* const _msk,
+  const char byte_delimiter,
+  const char chuck_delimiter
+);
+
+/*
+calls de_msk_prints(_msk, ' ', '\n')
+*/
+DE_CONTAINER_BITMASK_API u0 de_msk_print(
+  const de_msk *const _msk
 );
 
 // clang-format on
 #pragma GCC diagnostic pop
 #endif /* DE_CONTAINER_BITMASK_HEADER */
 
+// #define test
 /* ---- Implementation Guard ---- */
-#if defined(DE_CONTAINER_BITMASK_IMPLEMENTATION)
+#if defined(DE_CONTAINER_BITMASK_IMPLEMENTATION) || defined(test)
 #ifndef DE_CONTAINER_BITMASK_IMPLEMENTATION_INTERNAL
 #define DE_CONTAINER_BITMASK_IMPLEMENTATION_INTERNAL
 
@@ -314,11 +323,11 @@ de_msk_print(
 #define DE_MSK_MBLK_FILLED (~(mblk_t)0)
 
 #define DE_MSK_GET_BLOCKS_AMOUNT(amount)                                       \
-  ((usize)((amount + DE_MSK_MBLK_BITS - 1) / DE_MSK_MBLK_BITS))
-#define DE_MSK_GET_BLOCKS_INDEX(idx) ((usize)(idx / DE_MSK_MBLK_BITS))
+  ((usize)(((amount) + DE_MSK_MBLK_BITS - 1) / DE_MSK_MBLK_BITS))
+#define DE_MSK_GET_BLOCKS_INDEX(idx) ((usize)((idx) / DE_MSK_MBLK_BITS))
 
 /* normalized last-block bit count: 0 -> 0 (for 0-size), otherwise rem or 64 */
-DE_CONTAINER_BITMASK_INTERNAL usize DE_MSK_LAST_BLOCK_BITS(usize bits) {
+DE_CONTAINER_BITMASK_INTERNAL usize DE_MSK_BITS_MOD_MBLK(usize bits) {
   if (bits == 0)
     return 0;
   usize rem = bits % DE_MSK_MBLK_BITS;
@@ -357,13 +366,13 @@ DE_CONTAINER_BITMASK_INTERNAL u0 DE_MSK_memset(mblk_t *const _data,
 
 /* ---- Lifecycle ---- */
 DE_CONTAINER_BITMASK_INTERNAL de_msk de_msk_create(const usize _amount_bits) {
-  if (_amount_bits <= DE_MSK_SMALL_CAPACITY_BITS) {
+  if (_amount_bits <= DE_MSK_MBLK_BITS) {
     return (de_msk){.data.small = 0,
                     .is_small = true,
                     .bits_amount = _amount_bits,
                     .block_count = 0,
                     .last_block_bits_count =
-                        DE_MSK_LAST_BLOCK_BITS(_amount_bits)};
+                        DE_MSK_BITS_MOD_MBLK(_amount_bits)};
   } else {
     const usize blocks = DE_MSK_GET_BLOCKS_AMOUNT(_amount_bits);
     return (de_msk){.data.blocks = (mblk_t *)DE_MSK_calloc(blocks),
@@ -371,7 +380,7 @@ DE_CONTAINER_BITMASK_INTERNAL de_msk de_msk_create(const usize _amount_bits) {
                     .bits_amount = _amount_bits,
                     .block_count = blocks,
                     .last_block_bits_count =
-                        DE_MSK_LAST_BLOCK_BITS(_amount_bits)};
+                        DE_MSK_BITS_MOD_MBLK(_amount_bits)};
   }
 }
 DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_create_i(de_msk *const _msk,
@@ -414,10 +423,10 @@ DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_reserve(de_msk *const _msk,
     }
     _msk->data.blocks = new_data;
     _msk->block_count = new_blocks;
-    _msk->last_block_bits_count = DE_MSK_LAST_BLOCK_BITS(_amount_bits);
+    _msk->last_block_bits_count = DE_MSK_BITS_MOD_MBLK(_amount_bits);
     _msk->is_small = false;
     _msk->bits_amount = _amount_bits;
-  } else if (_amount_bits <= DE_MSK_SMALL_CAPACITY_BITS && !_msk->is_small) {
+  } else if (_amount_bits <= DE_MSK_MBLK_BITS && !_msk->is_small) {
     /* shrink to small inline if possible */
     mblk_t temp = _msk->data.blocks[0];
     de_msk_free(_msk);
@@ -426,13 +435,13 @@ DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_reserve(de_msk *const _msk,
   } else {
     /* update metadata only */
     _msk->bits_amount = _amount_bits;
-    _msk->last_block_bits_count = DE_MSK_LAST_BLOCK_BITS(_amount_bits);
+    _msk->last_block_bits_count = DE_MSK_BITS_MOD_MBLK(_amount_bits);
   }
 }
 
 DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_resize(de_msk *const _msk,
                                                const usize _amount_bits) {
-  if (_amount_bits > DE_MSK_SMALL_CAPACITY_BITS) {
+  if (_amount_bits > DE_MSK_MBLK_BITS) {
     if (_msk->is_small) {
       mblk_t temp = _msk->data.small;
       de_msk_free(_msk);
@@ -442,7 +451,7 @@ DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_resize(de_msk *const _msk,
       _msk->data.blocks[0] = temp;
       _msk->is_small = false;
       _msk->bits_amount = _amount_bits;
-      _msk->last_block_bits_count = DE_MSK_LAST_BLOCK_BITS(_amount_bits);
+      _msk->last_block_bits_count = DE_MSK_BITS_MOD_MBLK(_amount_bits);
     } else {
       usize blocks = DE_MSK_GET_BLOCKS_AMOUNT(_amount_bits);
       mblk_t *new_data = DE_MSK_calloc(blocks);
@@ -450,7 +459,7 @@ DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_resize(de_msk *const _msk,
                     blocks < _msk->block_count ? blocks : _msk->block_count);
       de_msk_free(_msk);
       _msk->block_count = blocks;
-      _msk->last_block_bits_count = DE_MSK_LAST_BLOCK_BITS(_amount_bits);
+      _msk->last_block_bits_count = DE_MSK_BITS_MOD_MBLK(_amount_bits);
       _msk->bits_amount = _amount_bits;
       _msk->is_small = false;
       _msk->data.blocks = new_data;
@@ -540,66 +549,56 @@ DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_set_range(de_msk *const _msk,
                                                   const usize _start_idx,
                                                   const usize _end_idx,
                                                   const bool _value) {
-#ifndef DE_CONTAINER_NO_SAFETY_CHECKS
+#ifndef DE_CONTAINER_NO_SAFETY_CHECKS1
   assert(_start_idx < _msk->bits_amount);
   assert(_end_idx < _msk->bits_amount);
   assert(_start_idx <= _end_idx);
 #endif
-
-  if (_start_idx == _end_idx)
-    return;
-
   if (_msk->is_small) {
-    mblk_t mask =
-        (((DE_MSK_ONE << (_end_idx - _start_idx + 1)) - 1) << _start_idx);
     if (_value) {
-      _msk->data.small |= mask;
+      _msk->data.small |=
+          ((DE_MSK_ONE << (_end_idx - _start_idx + 1)) - DE_MSK_ONE)
+          << _start_idx;
     } else {
-      _msk->data.small &= ~mask;
+      _msk->data.small &=
+          ~(((DE_MSK_ONE << (_end_idx - _start_idx + 1)) - DE_MSK_ONE)
+            << _start_idx);
     }
-    return;
-  }
-
-  usize start_block = DE_MSK_GET_BLOCKS_INDEX(_start_idx);
-  usize end_block = DE_MSK_GET_BLOCKS_INDEX(_end_idx);
-
-  usize start_bit = _start_idx % DE_MSK_MBLK_BITS;
-  usize end_bit = _end_idx % DE_MSK_MBLK_BITS;
-
-  if (start_block == end_block) {
-    mblk_t mask =
-        (((DE_MSK_ONE << (end_bit - start_bit + 1)) - 1) << start_bit);
-    if (_value)
-      _msk->data.blocks[start_block] |= mask;
-    else
-      _msk->data.blocks[start_block] &= ~mask;
-    return;
-  }
-
-  // partial start block
-  if (start_bit != 0) {
-    mblk_t mask = ~((DE_MSK_ONE << start_bit) - 1);
-    if (_value)
-      _msk->data.blocks[start_block] |= mask;
-    else
-      _msk->data.blocks[start_block] &= ~mask;
-    start_block++;
-  }
-
-  // full middle blocks
-  for (usize i = start_block; i < end_block; ++i) {
-    _msk->data.blocks[i] = _value ? DE_MSK_MBLK_FILLED : 0;
-  }
-
-  // partial end block
-  if (end_bit != DE_MSK_MBLK_BITS - 1) {
-    mblk_t mask = (DE_MSK_ONE << (end_bit + 1)) - 1;
-    if (_value)
-      _msk->data.blocks[end_block] |= mask;
-    else
-      _msk->data.blocks[end_block] &= ~mask;
   } else {
-    _msk->data.blocks[end_block] = _value ? DE_MSK_MBLK_FILLED : 0;
+    // from this index till end of block
+    const usize first_block_start_idx = DE_MSK_BITS_MOD_MBLK(_start_idx);
+    // from start of block till this index
+    const usize last_block_end_idx = _end_idx % DE_MSK_MBLK_BITS;
+    const usize block_start = DE_MSK_GET_BLOCKS_INDEX(_start_idx);
+    const usize block_amount = DE_MSK_GET_BLOCKS_INDEX(_end_idx) - block_start;
+
+    if (_value) {
+      if (block_amount) {
+        _msk->data.blocks[block_start] |= DE_MSK_MBLK_FILLED
+                                          << first_block_start_idx;
+        DE_MSK_memset(_msk->data.blocks + block_start + 1, DE_MSK_MBLK_FILLED,
+                      block_amount - 1);
+        _msk->data.blocks[block_start + block_amount] |=
+            DE_MSK_MBLK_FILLED >> (DE_MSK_MBLK_BITS - last_block_end_idx);
+
+      } else {
+        _msk->data.blocks[block_start] |=
+            ((DE_MSK_ONE << (_end_idx - _start_idx + DE_MSK_ONE)) - DE_MSK_ONE)
+            << _start_idx;
+      }
+    } else {
+      if (block_amount) {
+        _msk->data.blocks[block_start] &=
+            ~(DE_MSK_MBLK_FILLED << first_block_start_idx);
+        DE_MSK_memset(_msk->data.blocks + block_start + 1, 0, block_amount - 1);
+        _msk->data.blocks[block_start + block_amount] &=
+            ~(DE_MSK_MBLK_FILLED >> (DE_MSK_MBLK_BITS - last_block_end_idx));
+      } else {
+        _msk->data.blocks[block_start] &= ~(
+            ((DE_MSK_ONE << (_end_idx - _start_idx + DE_MSK_ONE)) - DE_MSK_ONE)
+            << _start_idx);
+      }
+    }
   }
 }
 
@@ -625,48 +624,34 @@ DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_flip_range(de_msk *const _msk,
   assert(_end_idx < _msk->bits_amount);
   assert(_start_idx <= _end_idx);
 #endif
-
-  if (_start_idx == _end_idx)
-    return;
-
   if (_msk->is_small) {
-    mblk_t mask =
-        (((DE_MSK_ONE << (_end_idx - _start_idx + 1)) - 1) << _start_idx);
-    _msk->data.small ^= mask;
-    return;
-  }
-
-  usize start_block = DE_MSK_GET_BLOCKS_INDEX(_start_idx);
-  usize end_block = DE_MSK_GET_BLOCKS_INDEX(_end_idx);
-
-  usize start_bit = _start_idx % DE_MSK_MBLK_BITS;
-  usize end_bit = _end_idx % DE_MSK_MBLK_BITS;
-
-  if (start_block == end_block) {
-    mblk_t mask =
-        (((DE_MSK_ONE << (end_bit - start_bit + 1)) - 1) << start_bit);
-    _msk->data.blocks[start_block] ^= mask;
-    return;
-  }
-
-  // partial start block
-  if (start_bit != 0) {
-    mblk_t mask = ~((DE_MSK_ONE << start_bit) - 1);
-    _msk->data.blocks[start_block] ^= mask;
-    start_block++;
-  }
-
-  // full middle blocks
-  for (usize i = start_block; i < end_block; ++i) {
-    _msk->data.blocks[i] ^= DE_MSK_MBLK_FILLED;
-  }
-
-  // partial end block
-  if (end_bit != DE_MSK_MBLK_BITS - 1) {
-    mblk_t mask = (DE_MSK_ONE << (end_bit + 1)) - 1;
-    _msk->data.blocks[end_block] ^= mask;
+    _msk->data.small ^=
+        ((DE_MSK_ONE << (_end_idx - _start_idx + 1)) - DE_MSK_ONE)
+        << _start_idx;
   } else {
-    _msk->data.blocks[end_block] ^= DE_MSK_MBLK_FILLED;
+    // from this index till end of block
+    const usize first_block_start_idx = DE_MSK_BITS_MOD_MBLK(_start_idx);
+    // from start of block till this index
+    const usize last_block_end_idx = _end_idx % DE_MSK_MBLK_BITS;
+    const usize block_start = DE_MSK_GET_BLOCKS_INDEX(_start_idx);
+    const usize block_amount = DE_MSK_GET_BLOCKS_INDEX(_end_idx) - block_start;
+
+    if (block_amount) {
+      _msk->data.blocks[block_start] ^= DE_MSK_MBLK_FILLED
+                                        << first_block_start_idx;
+
+      for (usize i = block_start + 1; i < (block_amount + block_start); ++i) {
+        _msk->data.blocks[i] ^= DE_MSK_MBLK_FILLED;
+      }
+
+      _msk->data.blocks[block_start + block_amount] ^=
+          DE_MSK_MBLK_FILLED >> (DE_MSK_MBLK_BITS - last_block_end_idx);
+
+    } else {
+      _msk->data.blocks[block_start] ^=
+          ((DE_MSK_ONE << (_end_idx - _start_idx + DE_MSK_ONE)) - DE_MSK_ONE)
+          << _start_idx;
+    }
   }
 }
 
@@ -691,7 +676,7 @@ DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_fill(de_msk *const _msk) {
   }
   if (_msk->is_small) {
     _msk->data.small =
-        DE_MSK_MBLK_FILLED >> (DE_MSK_SMALL_CAPACITY_BITS - _msk->bits_amount);
+        DE_MSK_MBLK_FILLED >> (DE_MSK_MBLK_BITS - _msk->bits_amount);
   } else {
     DE_MSK_memset(_msk->data.blocks, DE_MSK_MBLK_FILLED, _msk->block_count - 1);
     _msk->data.blocks[_msk->block_count - 1] =
@@ -799,91 +784,8 @@ DE_CONTAINER_BITMASK_INTERNAL bool de_msk_info_valid(const de_msk *const _msk) {
 }
 
 DE_CONTAINER_BITMASK_INTERNAL bool de_msk_any(const de_msk *const _msk) {
-  if (_msk->bits_amount == 0)
-    return false;
-
   if (_msk->is_small) {
-    const mblk_t mask = (_msk->bits_amount >= DE_MSK_MBLK_BITS)
-                            ? DE_MSK_MBLK_FILLED
-                            : ((DE_MSK_ONE << _msk->bits_amount) - 1);
-    return (_msk->data.small & mask) != 0;
-  } else {
-    for (usize i = 0; i + 1 < _msk->block_count; ++i)
-      if (_msk->data.blocks[i] != 0)
-        return true;
-    const mblk_t mask = (_msk->last_block_bits_count >= DE_MSK_MBLK_BITS)
-                            ? DE_MSK_MBLK_FILLED
-                            : ((DE_MSK_ONE << _msk->last_block_bits_count) - 1);
-    return (_msk->data.blocks[_msk->block_count - 1] & mask) != 0;
-  }
-}
-
-DE_CONTAINER_BITMASK_INTERNAL bool de_msk_all(const de_msk *const _msk) {
-  if (_msk->bits_amount == 0)
-    return false;
-
-  if (_msk->is_small) {
-    const mblk_t mask = (_msk->bits_amount >= DE_MSK_MBLK_BITS)
-                            ? DE_MSK_MBLK_FILLED
-                            : ((DE_MSK_ONE << _msk->bits_amount) - 1);
-    return (_msk->data.small & mask) == mask;
-  } else {
-    for (usize i = 0; i + 1 < _msk->block_count; ++i)
-      if (~_msk->data.blocks[i] != 0)
-        return false;
-    const mblk_t mask = (_msk->last_block_bits_count >= DE_MSK_MBLK_BITS)
-                            ? DE_MSK_MBLK_FILLED
-                            : ((DE_MSK_ONE << _msk->last_block_bits_count) - 1);
-    return ((_msk->data.blocks[_msk->block_count - 1] & mask) == mask);
-  }
-}
-
-DE_CONTAINER_BITMASK_INTERNAL bool de_msk_none(const de_msk *const _msk) {
-  if (_msk->bits_amount == 0)
-    return true;
-
-  if (_msk->is_small) {
-    const mblk_t mask = (_msk->bits_amount >= DE_MSK_MBLK_BITS)
-                            ? DE_MSK_MBLK_FILLED
-                            : ((DE_MSK_ONE << _msk->bits_amount) - 1);
-    return (_msk->data.small & mask) == 0;
-  } else {
-    for (usize i = 0; i + 1 < _msk->block_count; ++i)
-      if (_msk->data.blocks[i] != 0)
-        return false;
-    const mblk_t mask = (_msk->last_block_bits_count >= DE_MSK_MBLK_BITS)
-                            ? DE_MSK_MBLK_FILLED
-                            : ((DE_MSK_ONE << _msk->last_block_bits_count) - 1);
-    return (_msk->data.blocks[_msk->block_count - 1] & mask) == 0;
-  }
-}
-
-DE_CONTAINER_BITMASK_INTERNAL usize de_msk_count(const de_msk *const _msk) {
-  if (_msk->bits_amount == 0)
-    return 0;
-
-  if (_msk->is_small) {
-    const mblk_t mask = (_msk->bits_amount >= DE_MSK_MBLK_BITS)
-                            ? DE_MSK_MBLK_FILLED
-                            : ((DE_MSK_ONE << _msk->bits_amount) - 1);
-    return (usize)__builtin_popcountll(_msk->data.small & mask);
-  } else {
-    usize out = 0;
-    for (usize i = 0; i + 1 < _msk->block_count; ++i)
-      out += (usize)__builtin_popcountll(_msk->data.blocks[i]);
-    const mblk_t mask = (_msk->last_block_bits_count >= DE_MSK_MBLK_BITS)
-                            ? DE_MSK_MBLK_FILLED
-                            : ((DE_MSK_ONE << _msk->last_block_bits_count) - 1);
-    out += (usize)__builtin_popcountll(
-        _msk->data.blocks[_msk->block_count - 1] & mask);
-    return out;
-  }
-}
-
-/*
-DE_CONTAINER_BITMASK_INTERNAL bool de_msk_any(const de_msk *const _msk) {
-  if (_msk->is_small) {
-    return _msk->data.small == 0;
+    return _msk->data.small != 0;
   } else {
     for (usize i = 0; i < _msk->block_count; ++i) {
       if (_msk->data.blocks[i])
@@ -895,15 +797,17 @@ DE_CONTAINER_BITMASK_INTERNAL bool de_msk_any(const de_msk *const _msk) {
 
 DE_CONTAINER_BITMASK_INTERNAL bool de_msk_all(const de_msk *const _msk) {
   if (_msk->is_small) {
-    return (~_msk->data.small) == 0;
+    return (~_msk->data.small << (DE_MSK_MBLK_BITS - _msk->bits_amount)) == 0;
   } else {
     const usize bcount = _msk->block_count - 1;
     for (usize i = 0; i < bcount; ++i) {
       if (~_msk->data.blocks[i] != 0)
         return false;
     }
-    return (~_msk->data.blocks[bcount] >>
-            (DE_MSK_MBLK_BITS - _msk->last_block_bits_count)) == 0;
+    // return _msk->data.blocks[bcount]
+
+    return (~_msk->data.blocks[bcount]
+            << (DE_MSK_MBLK_BITS - _msk->last_block_bits_count)) == 0;
   }
 }
 
@@ -931,51 +835,35 @@ DE_CONTAINER_BITMASK_INTERNAL usize de_msk_count(const de_msk *const _msk) {
     return out;
   }
 }
-*/
 #include <stdio.h>
 
-DE_CONTAINER_BITMASK_INTERNAL void de_msk_print(const de_msk *const _msk) {
-  if (_msk->bits_amount == 0) {
-    printf("(empty)\n");
-    return;
-  }
+DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_print_chunk(
+    mblk_t chuck_data, const char byte_delimiter, const char chuck_delimiter) {
 
-  usize bit_index = 0; // global bit index
+  for (usize i = 0; i < DE_MSK_MBLK_BITS; ++i) {
+    if (!(i % 8)) {
+      putchar(byte_delimiter);
+    }
+    putchar((chuck_data & 1) ? '1' : '0');
+    chuck_data >>= 1;
+  }
+  putchar(chuck_delimiter);
+}
+
+DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_prints(const de_msk *const _msk,
+                                               const char byte_delimiter,
+                                               const char chuck_delimiter) {
 
   if (_msk->is_small) {
-    mblk_t value = _msk->data.small;
-    for (usize i = 0; i < _msk->bits_amount; ++i) {
-      usize shift = _msk->bits_amount - 1 - i;
-      putchar((value & (DE_MSK_ONE << shift)) ? '1' : '0');
-      bit_index++;
-
-      if (bit_index % 8 == 0)
-        putchar(' ');
-      if (bit_index % 64 == 0)
-        putchar('\n');
-    }
+    de_msk_print_chunk(_msk->data.small, byte_delimiter, chuck_delimiter);
   } else {
-    for (usize b = 0; b < _msk->block_count; ++b) {
-      mblk_t block = _msk->data.blocks[_msk->block_count - 1 - b];
-      // print most significant block first
-      usize bits_in_block =
-          (b == 0) ? _msk->last_block_bits_count : DE_MSK_MBLK_BITS;
-
-      for (usize i = 0; i < bits_in_block; ++i) {
-        usize shift = bits_in_block - 1 - i;
-        putchar((block & (DE_MSK_ONE << shift)) ? '1' : '0');
-        bit_index++;
-
-        if (bit_index % 8 == 0)
-          putchar(' ');
-        if (bit_index % 64 == 0)
-          putchar('\n');
-      }
+    for (usize i = _msk->block_count; i-- > 0;) {
+      de_msk_print_chunk(_msk->data.blocks[i], byte_delimiter, chuck_delimiter);
     }
   }
-
-  if (bit_index % 64 != 0)
-    putchar('\n'); // ensure final newline
+}
+DE_CONTAINER_BITMASK_INTERNAL u0 de_msk_print(const de_msk *const _msk) {
+  de_msk_prints(_msk, ' ', '\n');
 }
 
 #endif
